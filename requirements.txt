@@ -1,0 +1,11 @@
+ultralytics
+opencv-contrib-python
+timm
+matplotlib
+numpy
+easyocr
+transformers
+aiohttp
+datasets
+scipy
+h5py
