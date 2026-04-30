@@ -1,0 +1,8 @@
+ultralytics
+opencv-contrib-python
+timm
+numpy
+easyocr
+transformers
+scipy
+pillow
