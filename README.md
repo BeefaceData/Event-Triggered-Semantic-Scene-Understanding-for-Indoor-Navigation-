@@ -1,252 +1,341 @@
 # Event-Triggered Semantic Scene Understanding for Indoor Navigation
 
-> Midterm Project — Advanced Computer Vision | Spring 2025
+This repository contains the final project code, report, slides, experiment outputs, and demo artifacts for a geometry-first indoor navigation system with selective semantic reasoning.
 
----
+The core idea is simple:
 
-## Overview
+- use geometry as the default navigation signal
+- measure when geometry becomes uncertain
+- invoke semantic reasoning only when uncertainty or scene cues justify the extra cost
 
-This project proposes a selective, event-triggered indoor navigation pipeline that invokes a vision-language model (BLIP) only at geometrically ambiguous decision points — reducing average inference latency by 35–63% compared to always-on semantic pipelines while maintaining semantic decision capability.
+The project compares three policy families:
 
----
+- `geometry_only`
+- `always_semantic`
+- `event_triggered`
 
-## Project Structure
+and evaluates them across:
 
+- Stage 1 frame-level HM3D analysis
+- Stage 2 closed-loop embodied Habitat evaluation
+- a recorded real-video demonstration
+
+## Main Claim
+
+The strongest supported claim of the project is not that semantics universally improves indoor navigation. The supported claim is narrower and more useful:
+
+- uncertainty-triggered semantic reasoning can be integrated into a geometry-first navigation stack in a selective, interpretable, and experimentally grounded way
+- `event_triggered + BLIP` is the strongest practical semantic policy in the current embodied setting
+- `geometry_only` remains a very strong raw movement baseline
+
+## Repository Layout
+
+```text
+Event-Triggered_Semantic_Scene_Understanding_for_Indoor_Navigation/
+  README.md
+  requirements.txt
+  src/                  # Core pipeline, evaluation scripts, utilities
+  app/                  # Assistive demo web app + FastAPI backend
+  report/               # Final paper/report source
+  slides/               # Beamer slide deck
+  outputs/              # Evaluation results, demo videos, plots
+  images/               # Shared project figures
+  datasets/             # Local HM3D dataset location used by scripts
+  recorded_video/       # Source recorded footage for the real-video demo
+  notebooks/            # Notebook workspace
+  docs/                 # Presentation planning and supporting notes
 ```
-ACV_Project_Indoor_Navigation/
-│
-├── baseline1_geometry.py         # Baseline 1 — YOLOv8 + MiDaS geometry-only pipeline
-├── baseline2_ocr.py              # Baseline 2 — Always-on EasyOCR semantic pipeline
-├── baseline3_blip.py             # Baseline 3 — Always-on BLIP VQA semantic pipeline
-├── proposed_method.py            # Proposed — Event-triggered selective semantic pipeline
-│
-├── dataset_evaluation.py         # Evaluation on NYU Depth V2 (.mat format)
-├── dataset_evaluation_h5.py      # Evaluation on NYU Depth V2 (Kaggle h5 format)
-│
-├── nyu_depth_v2_labeled.mat      # NYU Depth V2 labeled dataset (download separately)
-├── NYU_Depth_Dataset_V2/         # NYU Depth V2 h5 dataset (download separately)
-│
-├── results.json                  # Results from .mat evaluation
-├── results_h5.json               # Results from h5 evaluation
-│
-└── README.md                     # This file
-```
 
----
+## Important Folders
 
-## Installation
+### `src/`
 
-### 1. Create and activate conda environment
+Main implementation and experiment scripts.
+
+Key files:
+
+- `pipeline.py`: shared frame-level perception pipeline
+- `geometry.py`: depth scoring, obstacle fusion, region scoring
+- `trigger.py`: uncertainty and cue-based trigger logic
+- `semantics.py`: BLIP / SmolVLM semantic querying logic
+- `models.py`: model loading
+- `evaluate_hm3d.py`: Stage 1 frame-level evaluation
+- `threshold_calibration.py`: trigger-threshold sweep
+- `backend_comparison.py`: BLIP / SmolVLM / Qwen backend screening
+- `prompt_ablation.py`: prompt-stability comparison
+- `run_closed_loop_hm3d.py`: single-scene embodied rollout
+- `evaluate_closed_loop_hm3d.py`: Stage 2 closed-loop evaluation
+- `run_recorded_video_demo.py`: recorded real-video demo pipeline
+- `compare_recorded_demo_policies.py`: policy comparison on recorded video
+
+### `report/`
+
+Final report source.
+
+Main entry files:
+
+- `report/main_full.tex`: full draft version
+- `report/main_ieee.tex`: IEEE-style version
+- `report/main_cvpr.tex`: CVPR-style version
+
+Main sections:
+
+- `report/sections/introduction.tex`
+- `report/sections/related_work.tex`
+- `report/sections/method.tex`
+- `report/sections/stage1_experimental_setup.tex`
+- `report/sections/stage1_results.tex`
+- `report/sections/stage2_method.tex`
+- `report/sections/stage2_experimental_setup.tex`
+- `report/sections/stage2_results.tex`
+- `report/sections/recorded_real_video_demo_results.tex`
+- `report/sections/discussion.tex`
+- `report/sections/limitations.tex`
+- `report/sections/conclusion.tex`
+
+### `slides/`
+
+Presentation deck source:
+
+- `slides/main.tex`
+
+### `app/`
+
+Prototype assistive guidance app:
+
+- browser camera frontend
+- FastAPI backend
+- speech and vibration-oriented guidance layer
+
+See [app/README.md](/home/cmu/Event-Triggered_Semantic_Scene_Understanding_for_Indoor_Navigation/app/README.md:1) for app-specific usage.
+
+### `outputs/`
+
+Experiment outputs and demo artifacts.
+
+Important subfolders:
+
+- `outputs/val/calibration/`: threshold calibration artifacts
+- `outputs/val/backend_comparison/`: Stage 1 backend screening
+- `outputs/val/closed_loop/`: Stage 2 evaluation outputs
+- `outputs/plots/`: summary plots used for the report and slides
+- `outputs/demo/`: recorded real-video policy comparisons
+
+## Core Method
+
+The shared pipeline is geometry-first:
+
+1. detect obstacles
+2. estimate monocular depth
+3. fuse obstacle and depth cues
+4. score left / center / right regions
+5. compute uncertainty and cue-based trigger signals
+6. invoke semantics only when needed
+7. output a final direction decision
+
+The trigger combines:
+
+- relative separability
+- entropy
+- center-blocked state
+- OCR / signage semantic cues
+
+The calibrated operating point used in the report is:
+
+- `tau_delta = 0.08`
+- `tau_H = 1.03`
+
+## Main Experiment Stages
+
+### Stage 1: Frame-Level HM3D Evaluation
+
+Purpose:
+
+- validate trigger behavior
+- compare selective vs always-on semantic invocation
+- compare semantic backends before embodied control
+
+Main scripts:
+
+- `python src/threshold_calibration.py ...`
+- `python src/backend_comparison.py ...`
+- `python src/evaluate_hm3d.py ...`
+
+### Stage 2: Closed-Loop HM3D Evaluation
+
+Purpose:
+
+- test whether Stage 1 policy distinctions remain meaningful inside an action loop
+- compare movement behavior, semantic usage, latency, and recovery behavior
+
+Main scripts:
+
+- `python src/run_closed_loop_hm3d.py ...`
+- `python src/evaluate_closed_loop_hm3d.py ...`
+
+### Recorded Real-Video Demo
+
+Purpose:
+
+- verify that the same pipeline runs end to end outside simulation
+- inspect OCR/signage cues and qualitative policy differences on real footage
+
+Main scripts:
+
+- `python src/run_recorded_video_demo.py ...`
+- `python src/compare_recorded_demo_policies.py ...`
+
+## Typical Setup
+
+### 1. Create environment
 
 ```bash
-conda create -n acv_project python=3.11 -y
-conda activate acv_project
+conda create -n etssin python=3.10 -y
+conda activate etssin
 ```
 
-### 2. Install PyTorch with CUDA
-
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-```
-
-### 3. Install all dependencies
-
-```bash
-pip install ultralytics
-pip install opencv-contrib-python
-pip install timm
-pip install matplotlib
-pip install numpy
-pip install easyocr
-pip install transformers
-pip install scipy
-pip install h5py
-pip install datasets
-```
-
-Or install from requirements.txt:
+### 2. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
+### 3. Install Habitat-Sim
 
-## Dataset Setup
-
-### NYU Depth V2 (Labeled .mat — 2.8GB)
-
-Download directly:
-```
-http://horatio.cs.nyu.edu/mit/silberman/nyu_depth_v2/nyu_depth_v2_labeled.mat
-```
-Place `nyu_depth_v2_labeled.mat` in the project root directory.
-
-### NYU Depth V2 (Kaggle h5 — full dataset)
-
-Download from:
-```
-https://www.kaggle.com/datasets/soumikrakshit/nyu-depth-v2
-```
-Extract and place the `NYU_Depth_Dataset_V2/` folder in the project root directory.
-
----
-
-## Running the Pipelines
-
-### Baseline 1 — Geometry Only (YOLOv8 + MiDaS)
+Example:
 
 ```bash
-python baseline1_geometry.py
+conda install -c conda-forge -c aihabitat habitat-sim
 ```
-- Input: webcam (default) or video file
-- Output: live window with depth map, obstacle boxes, navigation decision
-- Press **Q** to quit and print evaluation summary
 
-### Baseline 2 — Always-On OCR
+### 4. Confirm dataset paths
+
+The evaluation scripts assume local HM3D assets are available. Check:
+
+- `datasets/hm3d/`
+- `minival_datasets/`
+- `train_dataset/`
+- `val_dataset/`
+
+and review `src/config.py` if you need to adjust paths.
+
+## Common Commands
+
+### Stage 1 evaluation
 
 ```bash
-python baseline2_ocr.py
+python src/evaluate_hm3d.py --split val --max-scenes 5 --frames-per-scene 20 --trajectory-length 15
 ```
-- Input: webcam (default) or video file
-- Output: live window with detected text boxes and navigation decision
-- Press **Q** to quit and print evaluation summary
 
-### Baseline 3 — Always-On BLIP
+### Trigger calibration
 
 ```bash
-python baseline3_blip.py
+python src/threshold_calibration.py --split val --max-scenes 100 --frames-per-scene 30
 ```
-- Input: webcam (default) or video file
-- Output: live window with BLIP answer and navigation decision
-- Press **Q** to quit and print evaluation summary
 
-### Proposed Method — Event-Triggered
+### Backend comparison
 
 ```bash
-python proposed_method.py
-```
-- Input: webcam (default) or video file
-- Output: live window showing trigger state (ON/OFF), decision, latency
-- Press **Q** to quit and print full evaluation summary
-
-### To run on a video file instead of webcam
-
-Change the last line of any script from:
-```python
-run_baseline(0)   # 0 = webcam
-```
-To:
-```python
-run_baseline("path/to/your/video.mp4")
+python src/backend_comparison.py --split val --max-scenes 5 --frames-per-scene 20 --trajectory-length 15
 ```
 
----
-
-## Dataset Evaluation
-
-### Run evaluation on NYU Depth V2 (.mat format)
+### Stage 2 single rollout
 
 ```bash
-python dataset_evaluation.py
+python src/run_closed_loop_hm3d.py --split val --steps 40 --save-video
 ```
 
-### Run evaluation on NYU Depth V2 (h5 format)
+### Stage 2 full evaluation
 
 ```bash
-python dataset_evaluation_h5.py
+python src/evaluate_closed_loop_hm3d.py --split val --max-scenes 5 --steps 40
 ```
 
-Both scripts evaluate all four pipelines on 100 frames and produce:
-- A printed results table comparing all methods
-- A saved `results.json` file with latency statistics
+### Recorded-video demo
 
-To evaluate more frames, change `NUM_FRAMES = 100` at the top of the script.
+```bash
+python src/run_recorded_video_demo.py --semantic-policy event_triggered --semantic-backend blip
+```
 
----
+### Recorded-demo policy comparison
 
-## Results Summary
+```bash
+python src/compare_recorded_demo_policies.py
+```
 
-### Webcam Evaluation
+## Main Output Artifacts
 
-| Method | Avg Latency | Semantic Calls |
-|---|---|---|
-| Geometry Only | ~46ms | 0% |
-| Semantic Always (OCR) | ~140ms | 100% |
-| Semantic Always (BLIP) | ~200ms | 100% |
-| **Proposed Method** | **~74ms avg** | **~17%** |
+Examples of report-relevant outputs:
 
-### NYU Depth V2 Dataset Evaluation (100 frames)
+- `outputs/val/calibration/threshold_calibration_heatmap.png`
+- `outputs/val/backend_comparison/backend_comparison.png`
+- `outputs/plots/stage2_policy_comparison_summary.svg`
+- `report/figures/stage2_policy_comparison_summary.png`
+- `report/figures/recorded_demo_policy_comparison.png`
 
-| Method | Avg Latency | Max Latency | Decisions |
-|---|---|---|---|
-| Geometry Only | ~46ms* | 7.5ms | left/center/right |
-| Semantic Always (OCR) | 126ms | 178ms | None detected |
-| Semantic Always (BLIP) | 121ms | 409ms | left/right |
-| **Proposed Method** | **79ms** | **138ms** | **left/center/right** |
+Important report files:
 
-*Decision logic only — full pipeline ~46ms from webcam evaluation.
+- `report/main_full.tex`
+- `report/main_ieee.tex`
+- `report/main_cvpr.tex`
 
-### Trigger Efficiency
+Important slide file:
 
-| Condition | Trigger Rate | Avg Latency |
-|---|---|---|
-| Webcam (controlled) | 17% | ~74ms |
-| NYU .mat (diverse scenes) | 68% | 79ms |
-| NYU h5 (basement) | 59% | 76ms |
+- `slides/main.tex`
 
----
+## Current Status
 
-## Models Used
+The repository now contains:
 
-| Model | Role | Source |
-|---|---|---|
-| YOLOv8n | Obstacle detection | Ultralytics |
-| MiDaS Small | Depth estimation | Intel ISL via PyTorch Hub |
-| EasyOCR | Text detection | JaidedAI |
-| BLIP-vqa-base | Visual question answering | Salesforce via HuggingFace |
+- completed Stage 1 and Stage 2 evaluation code
+- final report sections with figures and tables
+- a Beamer slide deck
+- recorded demo outputs
+- a prototype assistive guidance app
 
----
+The project should currently be understood as:
 
-## Key Findings
+- a strong prototype research system
+- not a certified real-world assistive navigation product
+- not a full goal-conditioned navigation benchmark yet
 
-- Proposed method reduces latency by **35–63%** vs always-on BLIP
-- OCR produces **zero valid decisions** on NYU Depth V2 — confirms VLM is necessary for datasets without signage
-- Trigger rate varies by scene type (17%–68%) — adaptive threshold calibration is the primary next step
+## Known Scope Limits
 
----
+The current results support:
 
-## Known Limitations
+- frame-level trigger validation
+- embodied movement and latency comparison
+- systems-level real-video demonstration
 
-- No ground truth navigation labels — decision accuracy not yet measured
-- Fixed trigger threshold (50.0) requires manual calibration per scene type
-- Evaluation on static frames — closed-loop navigation not tested
-- HM3DSem evaluation via Habitat-sim pending (requires Linux + Habitat-sim)
+They do not yet establish:
 
----
+- task-level goal success
+- SPL / full ObjectNav success metrics
+- robust real-world deployment claims
 
-## Future Work
+## Recommended Entry Points
 
-- Extend evaluation to HM3DSem via Habitat-sim on Linux
-- Evaluate on ScanNet for semantic robustness across cluttered environments
-- Ablation study: fixed vs adaptive vs random trigger thresholds
-- Add ground truth labels for decision accuracy measurement
-- Entropy-based ambiguity metric as alternative trigger condition
+If you are reading the project for the first time:
 
----
+1. start with this README
+2. read `report/sections/method.tex`
+3. read `report/sections/stage1_results.tex`
+4. read `report/sections/stage2_results.tex`
+5. open `slides/main.tex` for the presentation view
 
-## References
+If you want to run the app:
 
-1. Saranya M, Arulselvarani S. *Real-Time Obstacle Detection using YOLOv8 for Assistive Navigation.* INDJST, 2025.
-2. Medjaldi A et al. *Cost-Effective Real-Time Obstacle Detection for AGVs using YOLOv8 and RGB-D.* ETASR, 2025.
-3. Birkl R et al. *MiDaS v3.1 — A Model Zoo for Robust Monocular Relative Depth Estimation.* arXiv:2307.14460, 2023.
-4. Li J et al. *BLIP-2: Bootstrapping Language-Image Pre-training.* arXiv:2301.12597, 2023.
-5. Liu H et al. *Visual Instruction Tuning (LLaVA).* arXiv:2304.08485, 2023.
-6. Silberman N et al. *Indoor Segmentation and Support Inference from RGBD Images.* ECCV, 2012.
-7. Yadav K et al. *Habitat-Matterport 3D Semantics Dataset.* arXiv:2210.05633, 2022.
+1. read [app/README.md](/home/cmu/Event-Triggered_Semantic_Scene_Understanding_for_Indoor_Navigation/app/README.md:1)
 
----
+If you want to inspect the evaluation artifacts:
 
-## License
+1. browse `outputs/val/`
+2. browse `outputs/demo/`
+3. browse `report/figures/`
 
-Academic use only. Dataset usage subject to NYU Depth V2 MIT License and HM3DSem Matterport Terms of Use.
+## Notes
+
+Two practical points:
+
+- `report/main_cvpr.tex` requires the CVPR style files, including `cvpr.sty`
+- the mobile/browser camera app may require HTTPS or `localhost` for camera access, as described in `app/README.md`
