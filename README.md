@@ -263,25 +263,7 @@ python src/run_recorded_video_demo.py --semantic-policy event_triggered --semant
 python src/compare_recorded_demo_policies.py
 ```
 
-## Main Output Artifacts
 
-Examples of report-relevant outputs:
-
-- `outputs/val/calibration/threshold_calibration_heatmap.png`
-- `outputs/val/backend_comparison/backend_comparison.png`
-- `outputs/plots/stage2_policy_comparison_summary.svg`
-- `report/figures/stage2_policy_comparison_summary.png`
-- `report/figures/recorded_demo_policy_comparison.png`
-
-Important report files:
-
-- `report/main_full.tex`
-- `report/main_ieee.tex`
-- `report/main_cvpr.tex`
-
-Important slide file:
-
-- `slides/main.tex`
 
 ## Current Status
 
@@ -313,29 +295,3 @@ They do not yet establish:
 - SPL / full ObjectNav success metrics
 - robust real-world deployment claims
 
-## Recommended Entry Points
-
-If you are reading the project for the first time:
-
-1. start with this README
-2. read `report/sections/method.tex`
-3. read `report/sections/stage1_results.tex`
-4. read `report/sections/stage2_results.tex`
-5. open `slides/main.tex` for the presentation view
-
-If you want to run the app:
-
-1. read [app/README.md](/home/cmu/Event-Triggered_Semantic_Scene_Understanding_for_Indoor_Navigation/app/README.md:1)
-
-If you want to inspect the evaluation artifacts:
-
-1. browse `outputs/val/`
-2. browse `outputs/demo/`
-3. browse `report/figures/`
-
-## Notes
-
-Two practical points:
-
-- `report/main_cvpr.tex` requires the CVPR style files, including `cvpr.sty`
-- the mobile/browser camera app may require HTTPS or `localhost` for camera access, as described in `app/README.md`
