@@ -35,15 +35,6 @@ Event-Triggered_Semantic_Scene_Understanding_for_Indoor_Navigation/
   README.md
   requirements.txt
   src/                  # Core pipeline, evaluation scripts, utilities
-  app/                  # Assistive demo web app + FastAPI backend
-  report/               # Final paper/report source
-  slides/               # Beamer slide deck
-  outputs/              # Evaluation results, demo videos, plots
-  images/               # Shared project figures
-  datasets/             # Local HM3D dataset location used by scripts
-  recorded_video/       # Source recorded footage for the real-video demo
-  notebooks/            # Notebook workspace
-  docs/                 # Presentation planning and supporting notes
 ```
 
 ## Important Folders
@@ -67,59 +58,6 @@ Key files:
 - `evaluate_closed_loop_hm3d.py`: Stage 2 closed-loop evaluation
 - `run_recorded_video_demo.py`: recorded real-video demo pipeline
 - `compare_recorded_demo_policies.py`: policy comparison on recorded video
-
-### `report/`
-
-Final report source.
-
-Main entry files:
-
-- `report/main_full.tex`: full draft version
-- `report/main_ieee.tex`: IEEE-style version
-- `report/main_cvpr.tex`: CVPR-style version
-
-Main sections:
-
-- `report/sections/introduction.tex`
-- `report/sections/related_work.tex`
-- `report/sections/method.tex`
-- `report/sections/stage1_experimental_setup.tex`
-- `report/sections/stage1_results.tex`
-- `report/sections/stage2_method.tex`
-- `report/sections/stage2_experimental_setup.tex`
-- `report/sections/stage2_results.tex`
-- `report/sections/recorded_real_video_demo_results.tex`
-- `report/sections/discussion.tex`
-- `report/sections/limitations.tex`
-- `report/sections/conclusion.tex`
-
-### `slides/`
-
-Presentation deck source:
-
-- `slides/main.tex`
-
-### `app/`
-
-Prototype assistive guidance app:
-
-- browser camera frontend
-- FastAPI backend
-- speech and vibration-oriented guidance layer
-
-See [app/README.md](/home/cmu/Event-Triggered_Semantic_Scene_Understanding_for_Indoor_Navigation/app/README.md:1) for app-specific usage.
-
-### `outputs/`
-
-Experiment outputs and demo artifacts.
-
-Important subfolders:
-
-- `outputs/val/calibration/`: threshold calibration artifacts
-- `outputs/val/backend_comparison/`: Stage 1 backend screening
-- `outputs/val/closed_loop/`: Stage 2 evaluation outputs
-- `outputs/plots/`: summary plots used for the report and slides
-- `outputs/demo/`: recorded real-video policy comparisons
 
 ## Core Method
 
