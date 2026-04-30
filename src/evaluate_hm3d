@@ -1,0 +1,390 @@
+"""HM3D evaluation and review export for the new implementation."""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+from pathlib import Path
+
+import cv2
+import habitat_sim
+import numpy as np
+
+from config import (
+    FRAMES_PER_SCENE,
+    IMG_HEIGHT,
+    IMG_WIDTH,
+    SAMPLES_PER_SCENE,
+    SEMANTIC_BACKEND_OPTIONS,
+)
+from hm3d_dataset import (
+    resolve_annotated_config,
+    resolve_dataset_root,
+    split_output_dir,
+    split_review_dir,
+)
+from models import load_models
+from pipeline import process_frame
+from visualization import annotate_navigation_frame, stack_rgb_and_depth
+
+
+def ensure_dir(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate the navigation pipeline on HM3D scenes.")
+    parser.add_argument(
+        "--split",
+        default="example",
+        choices=["example", "minival", "val", "train"],
+        help="HM3D split to evaluate.",
+    )
+    parser.add_argument(
+        "--dataset-root",
+        default=None,
+        help="Optional explicit path to the HM3D split root.",
+    )
+    parser.add_argument(
+        "--annotated-config",
+        default=None,
+        help="Optional explicit path to a semantic scene dataset config JSON.",
+    )
+    parser.add_argument(
+        "--frames-per-scene",
+        type=int,
+        default=FRAMES_PER_SCENE,
+        help="Number of rendered frames per scene.",
+    )
+    parser.add_argument(
+        "--samples-per-scene",
+        type=int,
+        default=SAMPLES_PER_SCENE,
+        help="Number of saved review frames per scene.",
+    )
+    parser.add_argument(
+        "--max-scenes",
+        type=int,
+        default=None,
+        help="Optional cap on the number of scenes evaluated.",
+    )
+    parser.add_argument(
+        "--sampling-mode",
+        default="random",
+        choices=["random", "trajectory"],
+        help="How to sample scene coverage: isolated random viewpoints or short closed-loop trajectories.",
+    )
+    parser.add_argument(
+        "--trajectory-length",
+        type=int,
+        default=10,
+        help="Number of steps per trajectory when using --sampling-mode trajectory.",
+    )
+    parser.add_argument(
+        "--semantic-backend",
+        default=None,
+        choices=SEMANTIC_BACKEND_OPTIONS,
+        help="Semantic backend to use in the pipeline.",
+    )
+    parser.add_argument(
+        "--semantic-policy",
+        default="event_triggered",
+        choices=["geometry_only", "always_semantic", "event_triggered"],
+        help="How semantics should be used during frame-level evaluation.",
+    )
+    return parser.parse_args()
+
+
+def find_scenes(base_dir: Path, max_scenes: int | None = None):
+    glb_files = sorted(glob.glob(str(base_dir / "**" / "*.basis.glb"), recursive=True))
+    scenes = [
+        (Path(path).parent.name, Path(path))
+        for path in glb_files
+        if "semantic" not in Path(path).name
+    ]
+    if max_scenes is not None:
+        scenes = scenes[:max_scenes]
+    return scenes
+
+
+def scene_has_semantics(scene_glb_path: Path):
+    stem = scene_glb_path.stem.replace(".basis", "")
+    return (
+        (scene_glb_path.parent / f"{stem}.semantic.glb").exists()
+        and (scene_glb_path.parent / f"{stem}.semantic.txt").exists()
+    )
+
+
+def build_scene_load_spec(scene_glb_path: Path, dataset_root: Path, annotated_config: Path | None):
+    if scene_has_semantics(scene_glb_path) and annotated_config is not None and annotated_config.exists():
+        return {
+            "scene_id": str(scene_glb_path.relative_to(dataset_root)),
+            "scene_dataset_config_file": str(annotated_config),
+            "semantic_enabled": True,
+        }
+    return {
+        "scene_id": str(scene_glb_path),
+        "scene_dataset_config_file": None,
+        "semantic_enabled": False,
+    }
+
+
+def make_sim_config(scene_glb_path: Path, dataset_root: Path, annotated_config: Path | None):
+    backend_cfg = habitat_sim.SimulatorConfiguration()
+    scene_spec = build_scene_load_spec(scene_glb_path, dataset_root, annotated_config)
+    backend_cfg.scene_id = scene_spec["scene_id"]
+    if scene_spec["scene_dataset_config_file"] is not None:
+        backend_cfg.scene_dataset_config_file = scene_spec["scene_dataset_config_file"]
+    backend_cfg.enable_physics = False
+
+    sensor_spec = habitat_sim.CameraSensorSpec()
+    sensor_spec.uuid = "color_sensor"
+    sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
+    sensor_spec.resolution = [IMG_HEIGHT, IMG_WIDTH]
+    sensor_spec.position = [0.0, 1.5, 0.0]
+    sensor_spec.hfov = 90
+
+    agent_cfg = habitat_sim.agent.AgentConfiguration()
+    agent_cfg.sensor_specifications = [sensor_spec]
+
+    return habitat_sim.Configuration(backend_cfg, [agent_cfg]), scene_spec
+
+
+def observation_to_bgr(observation):
+    """Convert a Habitat observation into an OpenCV-friendly BGR frame."""
+    rgb = np.asarray(observation)
+    rgb = rgb[:, :, :3].astype(np.uint8)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def random_agent_state(sim, agent):
+    """Place the agent at a random navigable point with a random heading."""
+    nav_point = sim.pathfinder.get_random_navigable_point()
+    agent_state = habitat_sim.AgentState()
+    agent_state.position = nav_point
+    yaw = np.random.uniform(0, 2 * np.pi)
+    agent_state.rotation = habitat_sim.utils.common.quat_from_angle_axis(
+        yaw, np.array([0, 1, 0])
+    )
+    agent.set_state(agent_state)
+    return agent_state
+
+
+def render_random_frames(sim, agent, frames_per_scene: int):
+    """Render independent random viewpoints from a scene."""
+    frames = []
+    for _ in range(frames_per_scene):
+        random_agent_state(sim, agent)
+        observation = sim.get_sensor_observations()["color_sensor"]
+        frames.append(observation_to_bgr(observation))
+    return frames
+
+
+def render_trajectory_frames(sim, agent, frames_per_scene: int, trajectory_length: int):
+    """Render short rollouts that traverse the scene instead of isolated viewpoints."""
+    frames = []
+    actions = ["move_forward", "turn_left", "turn_right"]
+
+    while len(frames) < frames_per_scene:
+        random_agent_state(sim, agent)
+        for _ in range(max(trajectory_length, 1)):
+            observation = sim.get_sensor_observations()["color_sensor"]
+            frames.append(observation_to_bgr(observation))
+            if len(frames) >= frames_per_scene:
+                break
+            agent.act(np.random.choice(actions))
+    return frames
+
+
+def render_frames_from_scene(
+    scene_path: Path,
+    scene_id: str,
+    dataset_root: Path,
+    annotated_config: Path | None,
+    frames_per_scene: int,
+    sampling_mode: str,
+    trajectory_length: int,
+):
+    sim_cfg, scene_spec = make_sim_config(scene_path, dataset_root, annotated_config)
+    print(f"[INFO] Loading scene: {scene_id}")
+    print(
+        f"[INFO] Semantic annotations {'enabled' if scene_spec['semantic_enabled'] else 'not found'} for {scene_id}"
+    )
+
+    sim = habitat_sim.Simulator(sim_cfg)
+    agent = sim.initialize_agent(0)
+    np.random.seed(42)
+    if sampling_mode == "random":
+        frames = render_random_frames(sim, agent, frames_per_scene)
+    elif sampling_mode == "trajectory":
+        frames = render_trajectory_frames(sim, agent, frames_per_scene, trajectory_length)
+    else:
+        raise ValueError(f"Unknown sampling mode: {sampling_mode}")
+
+    sim.close()
+    return frames, scene_spec
+
+
+def sample_indices(num_frames: int, samples_per_scene: int):
+    if samples_per_scene >= num_frames:
+        return set(range(num_frames))
+    return set(np.linspace(0, num_frames - 1, num=samples_per_scene, dtype=int).tolist())
+
+
+def make_video_writer(path: Path, width: int, height: int, fps: int = 5):
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    return cv2.VideoWriter(str(path), fourcc, fps, (width, height))
+
+
+def json_ready(value):
+    """Convert nested NumPy values into JSON-friendly Python types."""
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {
+            key: json_ready(item)
+            for key, item in value.items()
+            if key not in {"depth_visualization", "raw_depth_visualization"}
+        }
+    if isinstance(value, list):
+        return [json_ready(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_ready(item) for item in value]
+    return value
+
+
+def summarize_method(records, key):
+    latencies = [record[key]["latency_ms"] for record in records]
+    decisions = [record[key]["decision"] for record in records]
+    return {
+        "avg_latency": float(np.mean(latencies)),
+        "min_latency": float(np.min(latencies)),
+        "max_latency": float(np.max(latencies)),
+        "decisions": {str(decision): decisions.count(decision) for decision in set(decisions)},
+    }
+
+
+def semantic_output_suffix(semantic_policy: str, semantic_backend: str) -> str:
+    if semantic_policy == "geometry_only":
+        return semantic_policy
+    return f"{semantic_policy}_{semantic_backend}"
+
+
+def main():
+    args = parse_args()
+    dataset_root = resolve_dataset_root(args.split, args.dataset_root)
+    annotated_config = resolve_annotated_config(dataset_root, args.split, args.annotated_config)
+    output_root = split_output_dir(args.split)
+    output_suffix = semantic_output_suffix(args.semantic_policy, args.semantic_backend)
+    review_dir = split_review_dir(args.split) / output_suffix
+    results_json = output_root / f"results_hm3d_{args.split}_{output_suffix}.json"
+
+    ensure_dir(review_dir)
+    ensure_dir(output_root)
+    scenes = find_scenes(dataset_root, max_scenes=args.max_scenes)
+    if not scenes:
+        raise RuntimeError(f"No HM3D scenes found under {dataset_root}")
+
+    print(f"[INFO] Found {len(scenes)} scenes")
+    print(f"[INFO] Dataset root: {dataset_root}")
+    print(f"[INFO] Sampling mode: {args.sampling_mode}")
+    print(f"[INFO] Semantic policy: {args.semantic_policy}")
+    if annotated_config is not None and annotated_config.exists():
+        print(f"[INFO] Annotated config: {annotated_config}")
+    else:
+        print("[INFO] Annotated config: not found; semantic stage loading will only work for raw geometry scenes")
+    models = load_models(semantic_backend=args.semantic_backend)
+
+    records = []
+    review_records = []
+
+    for scene_id, scene_path in scenes:
+        frames, scene_spec = render_frames_from_scene(
+            scene_path,
+            scene_id,
+            dataset_root,
+            annotated_config,
+            args.frames_per_scene,
+            args.sampling_mode,
+            args.trajectory_length,
+        )
+        scene_review_dir = review_dir / scene_id
+        ensure_dir(scene_review_dir)
+        keep = sample_indices(len(frames), args.samples_per_scene)
+        rgb_video = make_video_writer(scene_review_dir / f"{scene_id}_annotated.mp4", IMG_WIDTH, IMG_HEIGHT)
+        combo_video = make_video_writer(scene_review_dir / f"{scene_id}_rgb_depth.mp4", IMG_WIDTH * 2, IMG_HEIGHT)
+
+        for frame_index, frame in enumerate(frames):
+            record = process_frame(frame, models, semantic_policy=args.semantic_policy)
+            frame_record = {
+                "scene_id": scene_id,
+                "frame_index": frame_index,
+                "semantic_enabled": scene_spec["semantic_enabled"],
+                **record,
+            }
+            records.append(json_ready(frame_record))
+
+            annotated = annotate_navigation_frame(frame, frame_record)
+            combo = stack_rgb_and_depth(annotated, frame_record["depth_visualization"])
+            rgb_video.write(annotated)
+            combo_video.write(combo)
+
+            if frame_index in keep:
+                image_path = scene_review_dir / f"frame_{frame_index:03d}.jpg"
+                cv2.imwrite(str(image_path), annotated)
+                review_records.append(
+                    {
+                        "scene_id": scene_id,
+                        "frame_index": frame_index,
+                        "image_path": str(image_path),
+                        "geometry_decision": record["baseline_geometry"]["decision"],
+                        "semantic_backend": record["semantic_backend"],
+                        "semantic_decision": record["baseline_semantic"]["decision"],
+                        "blip_decision": record["baseline_blip"]["decision"],
+                        "proposed_decision": record["proposed"]["decision"],
+                        "triggered": record["trigger"]["triggered"],
+                        "trigger_reasons": record["trigger"]["reasons"],
+                        "entropy": record["trigger"]["entropy"],
+                        "relative_separability": record["trigger"]["relative_separability"],
+                    }
+                )
+
+        rgb_video.release()
+        combo_video.release()
+
+    output = {
+        "dataset": f"HM3D {args.split}",
+        "dataset_root": str(dataset_root),
+        "annotated_config": str(annotated_config) if annotated_config is not None else None,
+        "num_scenes": len(scenes),
+        "num_frames": len(records),
+        "frames_per_scene": args.frames_per_scene,
+        "sampling_mode": args.sampling_mode,
+        "trajectory_length": args.trajectory_length if args.sampling_mode == "trajectory" else None,
+        "summary": {
+            "baseline_geometry": summarize_method(records, "baseline_geometry"),
+            "baseline_ocr": summarize_method(records, "baseline_ocr"),
+            "baseline_semantic": summarize_method(records, "baseline_semantic"),
+            "baseline_blip": summarize_method(records, "baseline_blip"),
+            "proposed": summarize_method(records, "proposed"),
+        },
+        "semantic_policy": args.semantic_policy,
+        "semantic_backend": models["semantic_backend"],
+        "trigger_rate": (
+            sum(1 for record in records if record["trigger"]["triggered"]) / max(len(records), 1) * 100.0
+        ),
+        "review_dir": str(review_dir),
+        "review_records": review_records,
+        "frame_records": records,
+    }
+
+    ensure_dir(results_json.parent)
+    results_json.write_text(json.dumps(output, indent=2))
+    print(f"[INFO] Results saved to {results_json}")
+
+
+if __name__ == "__main__":
+    main()
